@@ -14,7 +14,7 @@ var BOT_AVATARS = { Ali: { bot: 'ali' }, 'Ayşe': { bot: 'ayse' }, Mehmet: { bot
 
 var rooms = {}; // code -> room
 var QUICK_WAIT = 20000; // Hızlı Katıl bekleme süresi (ms); dolmazsa botlar oturur
-var QUICK_THEMES = ['koy']; // hızlı masalarda sunucunun seçtiği mekân havuzu
+var QUICK_THEMES = ['koy', 'kahve']; // hızlı masalarda sunucunun seçtiği mekân havuzu
 
 function code() { var s = '', A = 'ABCDEFGHJKLMNPRSTUVYZ23456789'; for (var i = 0; i < 4; i++) s += A[Math.floor(Math.random() * A.length)]; return rooms[s] ? code() : s; }
 function token() { return Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2); }
