@@ -71,7 +71,12 @@ function me(body, cb) {
     if (e) return cb(e);
     var changed = false;
     if (body.name) { var n = cleanName(body.name); if (n !== p.name) { p.name = n; changed = true; } }
-    if (body.avatar) { p.avatar = cleanAvatar(body.avatar); changed = true; }
+    if (body.avatar) { p.avatar = cleanAvatar(body.avatar); changed = true;
+      if (p.avatar && p.avatar.intro) { // Masa Giriş Skini: yalnızca sahip olunan kuşanılabilir
+        var okIntro = Object.keys(catalog).some(function (id) { var c = catalog[id]; return c.cat === 'intro' && c.val === p.avatar.intro && p.owned.indexOf(id) >= 0; });
+        if (!okIntro) delete p.avatar.intro;
+      }
+    }
     if (changed) put(p);
     cb(null, publicView(p));
   });
@@ -144,4 +149,5 @@ function handleHttp(req, res, url) {
   });
   return true;
 }
-module.exports = { init: init, handleHttp: handleHttp, auth: auth, grant: grant, applyHand: applyHand, applyMatch: applyMatch, levelOf: levelOf, publicView: publicView, modeName: function () { return mode; }, count: function (cb) { if (DB) DB.query('SELECT count(*)::int AS n FROM players').then(function (r) { cb(r.rows[0].n); }).catch(function () { cb(-1); }); else cb(Object.keys(mem).length); } };
+function ownsIntro(p, val) { return Object.keys(catalog).some(function (id) { var c = catalog[id]; return c.cat === 'intro' && c.val === val && p.owned.indexOf(id) >= 0; }); }
+module.exports = { init: init, handleHttp: handleHttp, auth: auth, ownsIntro: ownsIntro, grant: grant, applyHand: applyHand, applyMatch: applyMatch, levelOf: levelOf, publicView: publicView, modeName: function () { return mode; }, count: function (cb) { if (DB) DB.query('SELECT count(*)::int AS n FROM players').then(function (r) { cb(r.rows[0].n); }).catch(function () { cb(-1); }); else cb(Object.keys(mem).length); } };
