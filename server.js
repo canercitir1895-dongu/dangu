@@ -14,7 +14,7 @@ var BOT_AVATARS = { Ali: { bot: 'ali' }, 'Ayşe': { bot: 'ayse' }, Mehmet: { bot
 
 var rooms = {}; // code -> room
 var QUICK_WAIT = 20000; // Hızlı Katıl bekleme süresi (ms); dolmazsa botlar oturur
-var QUICK_THEMES = ['koy', 'kahve']; // hızlı masalarda sunucunun seçtiği mekân havuzu
+var QUICK_THEMES = ['kahve', 'sokak', 'sanayi', 'cinar', 'soba', 'apartman', 'bag']; // hızlı masalar: ücretsiz mekân // hızlı masalarda sunucunun seçtiği mekân havuzu
 
 function code() { var s = '', A = 'ABCDEFGHJKLMNPRSTUVYZ23456789'; for (var i = 0; i < 4; i++) s += A[Math.floor(Math.random() * A.length)]; return rooms[s] ? code() : s; }
 function token() { return Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2); }
@@ -235,7 +235,7 @@ function handle(ws, me, m) {
   if (m.t === 'create') {
     r = newRoom(); var s0 = { name: (m.name || 'Oyuncu').slice(0, 14), avatar: m.avatar || null, skins: m.skins || 0, bot: false, token: token(), ws: ws };
     r.seats[0] = s0; r.host = 0; me.room = r; me.seat = 0;
-    if (m.settings) Object.assign(r.settings, { claimTime: Math.max(3000, Math.min(20000, (m.settings.claimTime || 8) * 1000)), jokerPenalty: m.settings.jokerPenalty || 10, totalHands: m.settings.totalHands, theme: String(m.settings.theme || 'koy').slice(0, 24) }); // tema maç boyunca sabit, herkes aynı mekânı görür
+    if (m.settings) Object.assign(r.settings, { claimTime: Math.max(3000, Math.min(20000, (m.settings.claimTime || 8) * 1000)), jokerPenalty: m.settings.jokerPenalty || 10, totalHands: m.settings.totalHands, theme: String(m.settings.theme || 'kahve').slice(0, 24) }); // tema maç boyunca sabit, herkes aynı mekânı görür
     send(ws, { t: 'joined', code: r.code, seat: 0, token: s0.token });
     broadcastRoom(r); log(r, 'oda kuruldu: ' + s0.name);
     return;
