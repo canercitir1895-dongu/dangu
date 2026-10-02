@@ -5,16 +5,18 @@
 var http = require('http');
 var WebSocketServer = require('ws').WebSocketServer;
 var Okey = require('./engine.js');
+var Accounts = require('./accounts.js');
 
 var PORT = process.env.PORT || 8080;
-var BOT_DELAY = 900;        // bot hamle gecikmesi (ms)
+var BOT_DELAY = parseInt(process.env.BOT_DELAY) || 900;        // bot hamle gecikmesi (ms)
 var CLAIM_TIMEOUT = 8000;   // Al / Geç süresi (ms)
 var BOT_NAMES = ['Ali', 'Ayşe', 'Mehmet'];
 var BOT_AVATARS = { Ali: { bot: 'ali' }, 'Ayşe': { bot: 'ayse' }, Mehmet: { bot: 'mehmet' } };
 
 var rooms = {}; // code -> room
-var QUICK_WAIT = 20000; // Hızlı Katıl bekleme süresi (ms); dolmazsa botlar oturur
-var QUICK_THEMES = ['kahve', 'sokak', 'sanayi', 'cinar', 'soba', 'apartman', 'bag']; // hızlı masalar: ücretsiz mekân // hızlı masalarda sunucunun seçtiği mekân havuzu
+var QUICK_WAIT = parseInt(process.env.QUICK_WAIT) || 20000; // Hızlı Katıl bekleme süresi (ms); dolmazsa botlar oturur
+var QUICK_THEMES = ['kahve', 'sokak', 'sanayi', 'cinar', 'soba', 'apartman', 'bag'];
+var ALL_THEMES = QUICK_THEMES.concat(['koy']); // istemcinin isteyebileceği mekânlar // hızlı masalar: ücretsiz mekân // hızlı masalarda sunucunun seçtiği mekân havuzu
 
 function code() { var s = '', A = 'ABCDEFGHJKLMNPRSTUVYZ23456789'; for (var i = 0; i < 4; i++) s += A[Math.floor(Math.random() * A.length)]; return rooms[s] ? code() : s; }
 function token() { return Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2); }
@@ -111,6 +113,24 @@ function handleSlap(r, seat, m) {
   if (Date.now() >= pk.until) throw new Error('Süre doldu.');
   endPeek(r, from, 'slap');
 }
+function accOf(m) { return m.acc && typeof m.acc.id === 'string' && typeof m.acc.token === 'string' ? { id: m.acc.id.slice(0, 40), token: m.acc.token.slice(0, 80) } : null; }
+// el / maç bitince hesaplara ödül yaz (yalnızca hesabı olan gerçek oyuncular); sonucu oyuncuya 'reward' mesajıyla bildir
+function rewardIfOver(r) {
+  var g = r.g; if (!g || g.phase !== 'handover') return;
+  if (!r.rewarded) r.rewarded = {};
+  if (r.rewarded[g.hand]) return; r.rewarded[g.hand] = true;
+  var ho = g.handOver, humans = r.seats.filter(function (s) { return s && !s.bot && s.acc; }).length;
+  if (humans < 1) return;
+  r.seats.forEach(function (s, i) {
+    if (!s || s.bot || !s.acc) return;
+    Accounts.grant(s.acc, function (p) {
+      var out = { hand: g.hand };
+      out.handXp = Accounts.applyHand(p, ho && ho.winner === i, 1);
+      if (g.finished && ho && ho.ranks) { var m = Accounts.applyMatch(p, ho.ranks[i], g.totalHands || 12, 1); out.matchXp = m.xp; out.coins = m.coins; out.rank = ho.ranks[i]; }
+      return out;
+    }, function (e, out, view) { if (!e && s.ws && s.ws.readyState === 1) send(s.ws, { t: 'reward', reward: out, player: view }); });
+  });
+}
 function startGame(r) {
   fillBots(r);
   r.g = Okey.newGame({ names: r.seats.map(function (s) { return s.name; }), jokerCapturePenalty: r.settings.jokerPenalty, totalHands: r.settings.totalHands });
@@ -139,13 +159,14 @@ function scheduleBots(r) {
     r.timer = setTimeout(function () {
       try { Okey.botStep(g); } catch (e) { log(r, 'bot hatası ' + e.message); g.phase = 'play'; }
       broadcastState(r, { event: 'bot', actor: a });
+      rewardIfOver(r);
       scheduleBots(r);
     }, g.phase === 'claim' ? Math.min(BOT_DELAY, 500) : BOT_DELAY);
     return;
   }
   if (g.phase === 'claim') { // insan talep süresi
     r.claimTimer = setTimeout(function () {
-      if (r.g && r.g.phase === 'claim' && Okey.claimant(r.g) === a) { try { Okey.actClaim(r.g, a, false); } catch (e) {} broadcastState(r, { event: 'claimTimeout', actor: a }); scheduleBots(r); }
+      if (r.g && r.g.phase === 'claim' && Okey.claimant(r.g) === a) { try { Okey.actClaim(r.g, a, false); } catch (e) {} broadcastState(r, { event: 'claimTimeout', actor: a }); rewardIfOver(r); scheduleBots(r); }
     }, r.settings.claimTime);
   }
 }
@@ -201,10 +222,16 @@ function unzipPublic() {
   console.log('public.zip açıldı: ' + n + ' dosya');
 }
 try { unzipPublic(); } catch (e) { console.log('public.zip hatası: ' + e.message); }
+Accounts.init({ publicDir: PUBLIC }, function (e, mode) { console.log('hesap deposu: ' + mode + (e ? ' (' + e.message + ')' : '')); });
 var MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.json': 'application/json', '.webmanifest': 'application/manifest+json', '.png': 'image/png', '.webp': 'image/webp', '.jpg': 'image/jpeg', '.svg': 'image/svg+xml', '.ico': 'image/x-icon', '.mp3': 'audio/mpeg', '.ogg': 'audio/ogg', '.txt': 'text/plain; charset=utf-8' };
 var server = http.createServer(function (req, res) {
   var url = (req.url || '/').split('?')[0];
-  if (url === '/durum') { res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' }); res.end('Döngü sunucusu çalışıyor. Odalar: ' + Object.keys(rooms).length); return; }
+  if (url === '/durum') { Accounts.count(function (n) { res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' }); res.end('Döngü sunucusu çalışıyor. Sürüm: v9.40. Mekânlar: ' + QUICK_THEMES.join(', ') + '. Odalar: ' + Object.keys(rooms).length + '. Hesap deposu: ' + Accounts.modeName() + ', oyuncu: ' + n); }); return; }
+  if (url === '/api/masalar') { // lobi: bekleyen hızlı masalar (mekân, el sayısı, oyuncu sayısı)
+    var list = []; Object.keys(rooms).forEach(function (c) { var q = rooms[c]; if (q.quick && !q.g) list.push({ theme: q.settings.theme, totalHands: q.settings.totalHands, players: q.seats.filter(function (x) { return x && !x.bot && x.ws && x.ws.readyState === 1; }).length }); });
+    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' }); res.end(JSON.stringify({ rooms: list, online: wss ? wss.clients.size : 0 })); return;
+  }
+  if (Accounts.handleHttp(req, res, url)) return;
   if (url === '/') url = '/index.html';
   var file = path.normalize(path.join(PUBLIC, url));
   if (file.indexOf(PUBLIC) !== 0) { res.writeHead(403); res.end(); return; }
@@ -233,7 +260,7 @@ wss.on('connection', function (ws) {
 function handle(ws, me, m) {
   var r;
   if (m.t === 'create') {
-    r = newRoom(); var s0 = { name: (m.name || 'Oyuncu').slice(0, 14), avatar: m.avatar || null, skins: m.skins || 0, bot: false, token: token(), ws: ws };
+    r = newRoom(); var s0 = { name: (m.name || 'Oyuncu').slice(0, 14), avatar: m.avatar || null, skins: m.skins || 0, bot: false, token: token(), ws: ws, acc: accOf(m) };
     r.seats[0] = s0; r.host = 0; me.room = r; me.seat = 0;
     if (m.settings) Object.assign(r.settings, { claimTime: Math.max(3000, Math.min(20000, (m.settings.claimTime || 8) * 1000)), jokerPenalty: m.settings.jokerPenalty || 10, totalHands: m.settings.totalHands, theme: String(m.settings.theme || 'kahve').slice(0, 24) }); // tema maç boyunca sabit, herkes aynı mekânı görür
     send(ws, { t: 'joined', code: r.code, seat: 0, token: s0.token });
@@ -242,9 +269,10 @@ function handle(ws, me, m) {
   }
   if (m.t === 'quick') { // Hızlı Katıl: ortak kuyruk (aynı el modu), 4 kişi olunca ya da QUICK_WAIT sonra botla doldurup başlar
     var th = m.settings && (m.settings.totalHands === 1 || m.settings.totalHands === 6) ? m.settings.totalHands : 12;
-    r = null; Object.keys(rooms).forEach(function (c) { var q = rooms[c]; if (!r && q.quick && !q.g && q.settings.totalHands === th && freeSeat(q) >= 0) r = q; });
-    if (!r) { r = newRoom(); r.quick = true; r.host = null; r.settings.totalHands = th; r.settings.theme = QUICK_THEMES[Math.floor(Math.random() * QUICK_THEMES.length)]; r.quickUntil = Date.now() + QUICK_WAIT; r.quickTimer = setTimeout(function () { if (!r.g && r.seats.some(function (x) { return x && !x.bot && x.ws && x.ws.readyState === 1; })) startGame(r); }, QUICK_WAIT); log(r, 'hızlı masa açıldı (' + th + ' el)'); }
-    var qi = freeSeat(r), qs = { name: (m.name || 'Oyuncu').slice(0, 14), avatar: m.avatar || null, skins: m.skins || 0, bot: false, token: token(), ws: ws };
+    var wantTheme = m.settings && ALL_THEMES.indexOf(m.settings.theme) >= 0 ? m.settings.theme : null; // oda = mekân: istenen mekândaki bekleyen masaya oturur
+    r = null; Object.keys(rooms).forEach(function (c) { var q = rooms[c]; if (!r && q.quick && !q.g && q.settings.totalHands === th && (!wantTheme || q.settings.theme === wantTheme) && freeSeat(q) >= 0) r = q; });
+    if (!r) { r = newRoom(); r.quick = true; r.host = null; r.settings.totalHands = th; r.settings.theme = wantTheme || QUICK_THEMES[Math.floor(Math.random() * QUICK_THEMES.length)]; r.quickUntil = Date.now() + QUICK_WAIT; r.quickTimer = setTimeout(function () { if (!r.g && r.seats.some(function (x) { return x && !x.bot && x.ws && x.ws.readyState === 1; })) startGame(r); }, QUICK_WAIT); log(r, 'hızlı masa açıldı (' + th + ' el)'); }
+    var qi = freeSeat(r), qs = { name: (m.name || 'Oyuncu').slice(0, 14), avatar: m.avatar || null, skins: m.skins || 0, bot: false, token: token(), ws: ws, acc: accOf(m) };
     r.seats[qi] = qs; me.room = r; me.seat = qi;
     send(ws, { t: 'joined', code: r.code, seat: qi, token: qs.token });
     broadcastRoom(r); log(r, qs.name + ' hızlı katıldı');
@@ -259,7 +287,7 @@ function handle(ws, me, m) {
     if (back >= 0) { r.seats[back].ws = ws; me.room = r; me.seat = back; send(ws, { t: 'joined', code: r.code, seat: back, token: m.token }); broadcastRoom(r); if (r.g) { send(ws, { t: 'state', view: viewFor(r, back), event: 'resync' }); scheduleBots(r); } return; }
     if (r.g) throw new Error('Bu masada oyun başlamış.');
     var i = freeSeat(r); if (i < 0) throw new Error('Masa dolu.');
-    var s = { name: (m.name || 'Oyuncu').slice(0, 14), avatar: m.avatar || null, skins: m.skins || 0, bot: false, token: token(), ws: ws };
+    var s = { name: (m.name || 'Oyuncu').slice(0, 14), avatar: m.avatar || null, skins: m.skins || 0, bot: false, token: token(), ws: ws, acc: accOf(m) };
     r.seats[i] = s; me.room = r; me.seat = i;
     send(ws, { t: 'joined', code: r.code, seat: i, token: s.token });
     broadcastRoom(r); log(r, s.name + ' katıldı');
@@ -273,6 +301,7 @@ function handle(ws, me, m) {
     if (r.prepUntil && Object.keys(r.peeks || {}).length) throw new Error('Bakış sürerken hamle yapılamaz.');
     var res = handleAct(r, me.seat, m);
     broadcastState(r, { event: 'act', actor: me.seat, kind: m.kind, result: res });
+    rewardIfOver(r);
     scheduleBots(r);
     return;
   }
